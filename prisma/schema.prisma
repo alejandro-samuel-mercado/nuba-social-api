@@ -1,0 +1,505 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── ENUMS ───────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  SUPERADMIN
+  ADMIN
+  MODERATOR
+  USER
+}
+
+enum TopicType {
+  FOOTBALL
+  STREAMING
+  NEWS
+  TV_CHANNELS
+}
+
+enum PostStatus {
+  APPROVED
+  PENDING
+  HIDDEN
+}
+
+enum ReactionType {
+  LIKE
+  LOVE
+  FIRE
+  STAR
+  CLAP
+}
+
+enum MatchStatus {
+  UPCOMING
+  LIVE
+  HALFTIME
+  FINISHED
+  POSTPONED
+}
+
+enum FeatureVisualMode {
+  AUTO
+  CUSTOM_IMAGE
+}
+
+enum ChatMessageType {
+  TEXT
+  STICKER
+  IMAGE
+  SUGGESTION
+}
+
+enum SuggestionStatus {
+  OPEN
+  REVIEWED
+  APPROVED
+  REJECTED
+  RESOLVED
+}
+
+enum GiveawayStatus {
+  OPEN
+  DRAWING
+  COMPLETED
+  CANCELLED
+}
+
+enum NotificationType {
+  NEW_POST
+  MATCH_UPDATE
+  NEW_POLL
+  GIVEAWAY_OPEN
+  GIVEAWAY_LIVE
+  GIVEAWAY_WIN
+  DIRECT_MESSAGE
+  SUGGESTION_UPDATE
+  TOPIC_CHAT
+  SYSTEM
+}
+
+// ─── USERS & AUTH (Cuentas cerradas creadas únicamente por Admin) ────────────
+
+model User {
+  id           String   @id @default(uuid())
+  username     String   @unique
+  email        String?  @unique
+  passwordHash String
+  displayName  String
+  bio          String?  @db.VarChar(250)
+  avatarUrl    String?
+  role         UserRole @default(USER)
+  isActive     Boolean  @default(true)
+  isMuted      Boolean  @default(false)
+
+  // Preferencias de diseño heredadas de sac
+  preferredTheme String @default("classic") // classic | cute | minimal | concert | oscuro
+  customColor    String? // Hex opcional para personalizar acento
+
+  // Push & retención
+  expoPushToken String?
+  lastVisitAt   DateTime @default(now())
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  refreshTokens          RefreshToken[]
+  notificationPreference NotificationPreference?
+  notifications          Notification[]
+  posts                  Post[]
+  comments               Comment[]
+  reactions              Reaction[]
+  ratings                Rating[]
+  topicChatMessages      TopicChatMessage[]
+  directThreadsAsUser    DirectThread[]          @relation("ThreadUser")
+  directMessagesSent     DirectMessage[]         @relation("DirectSender")
+  pollVotes              PollVote[]
+  giveawayEntries        GiveawayEntry[]
+  giveawaysWon           Giveaway[]              @relation("GiveawayWinner")
+
+  @@index([role])
+  @@index([isActive])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model NotificationPreference {
+  id               String  @id @default(uuid())
+  userId           String  @unique
+  footballPosts    Boolean @default(true)
+  streamingPosts   Boolean @default(true)
+  newsPosts        Boolean @default(true)
+  tvPosts          Boolean @default(true)
+  topicChats       Boolean @default(false)
+  directMessages   Boolean @default(true)
+  adminSuggestions Boolean @default(true)
+  polls            Boolean @default(true)
+  giveaways        Boolean @default(true)
+  pushEnabled      Boolean @default(true)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Notification {
+  id            String           @id @default(uuid())
+  userId        String
+  type          NotificationType
+  title         String           @db.VarChar(200)
+  body          String           @db.VarChar(500)
+  topic         TopicType?
+  referenceId   String?
+  referenceType String?
+  isRead        Boolean          @default(false)
+  createdAt     DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([createdAt])
+}
+
+// ─── CONFIGURACIÓN GLOBAL DEL SISTEMA (Feature Toggles desde Admin) ──────────
+
+model SystemSettings {
+  id                   String   @id @default("singleton")
+  appName              String   @default("Nuba Club")
+  announcementBanner   String?  @db.VarChar(300)
+  chatsEnabled         Boolean  @default(true)
+  commentsEnabled      Boolean  @default(true)
+  likesEnabled         Boolean  @default(true)
+  giveawaysEnabled     Boolean  @default(true)
+  pollsEnabled         Boolean  @default(true)
+  historyEnabled       Boolean  @default(true)
+  directChatEnabled    Boolean  @default(true)
+  chatImagesEnabled    Boolean  @default(true)
+  ratingsEnabled       Boolean  @default(true)
+  maxCommentLength     Int      @default(400)
+  commentCooldownSec   Int      @default(5)
+  chatImageCooldownSec Int      @default(45)
+  blockLinksInComments Boolean  @default(true)
+  updatedAt            DateTime @updatedAt
+}
+
+model RestrictedWord {
+  id        String   @id @default(uuid())
+  word      String   @unique
+  createdAt DateTime @default(now())
+}
+
+// ─── PUBLICACIONES POR TEMAS ─────────────────────────────────────────────────
+
+model Post {
+  id            String     @id @default(uuid())
+  topic         TopicType
+  subType       String     @default("GENERAL") // MATCH_FEATURE, FOOTBALL_POST, MOVIE, SERIES, ANIME, PREMIUM, DEMO, PROBLEM, PLAYLIST_ADDED, etc.
+  title         String     @db.VarChar(220)
+  content       String     @db.Text
+  images        String[]
+  tags          String[]
+  metadata      Json?      // Payload estructurado por tema (Streaming TMDB/Flex, TV NubaTV, News badge, etc.)
+  status        PostStatus @default(APPROVED)
+  isPinned      Boolean    @default(false)
+  allowComments Boolean    @default(true)
+
+  matchId String? @unique
+  match   Match?  @relation(fields: [matchId], references: [id], onDelete: SetNull)
+
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  comments  Comment[]
+  reactions Reaction[]
+  ratings   Rating[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([topic, status, createdAt])
+  @@index([isPinned])
+}
+
+model Comment {
+  id        String   @id @default(uuid())
+  content   String   @db.VarChar(600)
+  isHidden  Boolean  @default(false)
+  postId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User     @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  parentId  String?
+  parent    Comment? @relation("CommentReplies", fields: [parentId], references: [id], onDelete: Cascade)
+  replies   Comment[] @relation("CommentReplies")
+  createdAt DateTime @default(now())
+
+  @@index([postId, createdAt])
+  @@index([authorId])
+}
+
+model Reaction {
+  id        String       @id @default(uuid())
+  type      ReactionType @default(LIKE)
+  postId    String
+  userId    String
+  post      Post         @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime     @default(now())
+
+  @@unique([postId, userId])
+  @@index([postId])
+}
+
+model Rating {
+  id        String   @id @default(uuid())
+  score     Int      // 1 to 5
+  postId    String
+  userId    String
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([postId, userId])
+  @@index([postId])
+}
+
+// ─── FÚTBOL: LIGAS, EQUIPOS, PARTIDOS & TABLA DE POSICIONES ───────────────────
+
+model League {
+  id          String   @id @default(uuid())
+  name        String
+  shortName   String?
+  country     String   @default("Internacional")
+  season      String   @default("2026")
+  logoUrl     String?
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  teams     Team[]
+  matches   Match[]
+  standings Standing[]
+}
+
+model Team {
+  id             String   @id @default(uuid())
+  name           String
+  shortName      String   @db.VarChar(8)
+  logoUrl        String?
+  stadium        String?
+  city           String?
+  country        String?
+  colorPrimary   String   @default("#F9E4A0")
+  colorSecondary String   @default("#2D2D2D")
+  leagueId       String?
+  league         League?  @relation(fields: [leagueId], references: [id], onDelete: SetNull)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  homeMatches Match[]    @relation("HomeTeam")
+  awayMatches Match[]    @relation("AwayTeam")
+  standings   Standing[]
+
+  @@index([name])
+  @@index([leagueId])
+}
+
+model Match {
+  id              String            @id @default(uuid())
+  leagueId        String
+  league          League            @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  homeTeamId      String
+  homeTeam        Team              @relation("HomeTeam", fields: [homeTeamId], references: [id], onDelete: Cascade)
+  awayTeamId      String
+  awayTeam        Team              @relation("AwayTeam", fields: [awayTeamId], references: [id], onDelete: Cascade)
+  matchDate       DateTime
+  matchday        String?           // Ej. "Fecha 12", "Cuartos de Final"
+  stadium         String?
+  location        String?
+  broadcastInfo   String?           // Canal / App donde se transmite
+  status          MatchStatus       @default(UPCOMING)
+  homeScore       Int               @default(0)
+  awayScore       Int               @default(0)
+  featureMode     FeatureVisualMode @default(AUTO)
+  featureImageUrl String?
+  notes           String?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  post Post?
+
+  @@index([leagueId, matchDate])
+  @@index([matchDate])
+}
+
+model Standing {
+  id           String   @id @default(uuid())
+  leagueId     String
+  league       League   @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  teamId       String
+  team         Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  played       Int      @default(0)
+  won          Int      @default(0)
+  drawn        Int      @default(0)
+  lost         Int      @default(0)
+  goalsFor     Int      @default(0)
+  goalsAgainst Int      @default(0)
+  goalDiff     Int      @default(0)
+  points       Int      @default(0)
+  position     Int      @default(0)
+  updatedAt    DateTime @updatedAt
+
+  @@unique([leagueId, teamId])
+  @@index([leagueId, points])
+}
+
+// ─── CHATS POR TEMA & CHAT DIRECTO / SUGERENCIAS CON ADMIN ───────────────────
+
+model TopicChatMessage {
+  id          String          @id @default(uuid())
+  topic       TopicType
+  messageType ChatMessageType @default(TEXT)
+  content     String?         @db.VarChar(800)
+  stickerCode String?
+  imageUrl    String?
+  isDeleted   Boolean         @default(false)
+  senderId    String
+  sender      User            @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  createdAt   DateTime        @default(now())
+
+  @@index([topic, createdAt])
+}
+
+model TopicRoomConfig {
+  topic     TopicType @id
+  isLocked  Boolean   @default(false)
+  notice    String?   @db.VarChar(250)
+  updatedAt DateTime  @updatedAt
+}
+
+model DirectThread {
+  id              String           @id @default(uuid())
+  userId          String
+  user            User             @relation("ThreadUser", fields: [userId], references: [id], onDelete: Cascade)
+  subject         String           @default("Consulta General")
+  topic           String           @default("GENERAL") // FOOTBALL | STREAMING | TV_CHANNELS | NEWS | SUPPORT | OTHER
+  status          SuggestionStatus @default(OPEN)
+  unreadForAdmin  Int              @default(0)
+  unreadForUser   Int              @default(0)
+  lastMessageAt   DateTime         @default(now())
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  messages DirectMessage[]
+
+  @@index([userId, lastMessageAt])
+  @@index([status])
+}
+
+model DirectMessage {
+  id           String       @id @default(uuid())
+  threadId     String
+  thread       DirectThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  senderId     String
+  sender       User         @relation("DirectSender", fields: [senderId], references: [id], onDelete: Cascade)
+  content      String?      @db.VarChar(1200)
+  images       String[]
+  isSuggestion Boolean      @default(false)
+  metadata     Json?
+  isRead       Boolean      @default(false)
+  createdAt    DateTime     @default(now())
+
+  @@index([threadId, createdAt])
+}
+
+// ─── ENCUESTAS ───────────────────────────────────────────────────────────────
+
+model Poll {
+  id            String     @id @default(uuid())
+  question      String     @db.VarChar(250)
+  description   String?    @db.VarChar(500)
+  topic         TopicType?
+  allowMultiple Boolean    @default(false)
+  isClosed      Boolean    @default(false)
+  endsAt        DateTime?
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+
+  options PollOption[]
+  votes   PollVote[]
+}
+
+model PollOption {
+  id        String     @id @default(uuid())
+  pollId    String
+  poll      Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  label     String     @db.VarChar(160)
+  sortOrder Int        @default(0)
+  votes     PollVote[]
+
+  @@index([pollId])
+}
+
+model PollVote {
+  id        String     @id @default(uuid())
+  pollId    String
+  optionId  String
+  userId    String
+  poll      Poll       @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  option    PollOption @relation(fields: [optionId], references: [id], onDelete: Cascade)
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime   @default(now())
+
+  @@unique([pollId, optionId, userId])
+  @@index([pollId, userId])
+}
+
+// ─── SORTEOS EN VIVO & HISTORIAL ─────────────────────────────────────────────
+
+model Giveaway {
+  id               String         @id @default(uuid())
+  title            String         @db.VarChar(200)
+  description      String?        @db.Text
+  prizeDescription String         @db.VarChar(300)
+  imageUrl         String?
+  scheduledAt      DateTime
+  maxEntries       Int?
+  status           GiveawayStatus @default(OPEN)
+  winnerId         String?
+  winner           User?          @relation("GiveawayWinner", fields: [winnerId], references: [id], onDelete: SetNull)
+  drawnAt          DateTime?
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  entries GiveawayEntry[]
+
+  @@index([status, scheduledAt])
+}
+
+model GiveawayEntry {
+  id         String   @id @default(uuid())
+  giveawayId String
+  userId     String
+  giveaway   Giveaway @relation(fields: [giveawayId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([giveawayId, userId])
+  @@index([giveawayId])
+}

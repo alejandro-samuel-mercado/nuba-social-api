@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+coverage/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+
+# Uploaded user media
+uploads/*
+!uploads/.gitkeep
+
+# Logs & OS
+*.log
+*.tsbuildinfo
+.DS_Store
+Thumbs.db

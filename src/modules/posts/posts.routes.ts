@@ -205,10 +205,44 @@ postsRouter.get('/radar', async (req, res, next) => {
   }
 });
 
+postsRouter.get('/tags', async (req, res, next) => {
+  try {
+    const topic = typeof req.query.topic === 'string' && Object.values(TopicType).includes(req.query.topic as TopicType)
+      ? (req.query.topic as TopicType)
+      : undefined;
+    const posts = await prisma.post.findMany({
+      where: {
+        status: PostStatus.APPROVED,
+        ...(topic ? { topic } : {}),
+      },
+      select: { tags: true },
+      take: 100,
+    });
+    const counts: Record<string, number> = {};
+    for (const p of posts) {
+      if (Array.isArray(p.tags)) {
+        for (const t of p.tags) {
+          const clean = t.trim().toLowerCase();
+          if (clean) {
+            counts[clean] = (counts[clean] || 0) + 1;
+          }
+        }
+      }
+    }
+    const tags = Object.entries(counts)
+      .map(([tag, count]) => ({ tag, count }))
+      .sort((a, b) => b.count - a.count);
+    res.json({ tags });
+  } catch (err) {
+    next(err);
+  }
+});
+
 postsRouter.get('/', async (req, res, next) => {
   try {
     const topicParam = typeof req.query.topic === 'string' ? req.query.topic : undefined;
     const subTypeParam = typeof req.query.subType === 'string' ? req.query.subType.trim() : undefined;
+    const tagParam = typeof req.query.tag === 'string' ? req.query.tag.trim().toLowerCase() : undefined;
     const statusParam = typeof req.query.status === 'string' ? req.query.status : undefined;
     const search = typeof req.query.search === 'string' ? req.query.search.trim() : '';
     const page = Math.max(Number(req.query.page) || 1, 1);
@@ -222,6 +256,9 @@ postsRouter.get('/', async (req, res, next) => {
     }
     if (subTypeParam && subTypeParam !== 'ALL') {
       where.subType = subTypeParam;
+    }
+    if (tagParam && tagParam !== 'all') {
+      where.tags = { has: tagParam };
     }
     if (isStaff && statusParam && Object.values(PostStatus).includes(statusParam as PostStatus)) {
       where.status = statusParam;
